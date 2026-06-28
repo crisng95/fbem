@@ -156,6 +156,9 @@ All optional; sensible loopback defaults. See [.env.example](.env.example).
 | `FBEM_CAPTURES_DIR` | `$FBEM_HOME/captures` | Captured templates (contain live tokens) |
 | `FBEM_MEDIA_DIR` | `$FBEM_HOME/media` | Media served to the extension |
 | `FBEM_BRIDGE_URL` | `http://127.0.0.1:47102` | Where the MCP reaches the bridge |
+| `FBEM_TAB_TTL_S` | `7200` | *Advanced:* tab auto-reload window (seconds) that keeps tokens fresh |
+| `FBEM_TAB_ACTIVE_WINDOW_S` | `90` | *Advanced:* how recently a capture must arrive to count the tab as "active" (seconds) |
+| `FBEM_PUBLISH_OP_RE` | *(built-in regex)* | *Advanced:* override the regex matching the Reel publish mutation (set only if FB renames the op) |
 
 ## Security
 

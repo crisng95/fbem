@@ -43,10 +43,10 @@ _last_capture_url: Optional[str] = None
 # Which graphql op is the actual Reel publish. During reel creation FB fires
 # dozens of graphql ops (typeaheads, queries); only ONE publishes the post, so
 # "latest wins" would store the wrong one. Match the publish mutation by its
-# friendly name. Override via FB_PUBLISH_OP_RE if FB renames it.
+# friendly name. Override via FBEM_PUBLISH_OP_RE if FB renames it.
 _PUBLISH_OP_RE = re.compile(
     os.getenv(
-        "FB_PUBLISH_OP_RE",
+        "FBEM_PUBLISH_OP_RE",
         r"(Composer.*Create.*Mutation|Story.*Create.*Mutation|Reels?.*(Create|Publish).*Mutation)",
     ),
     re.IGNORECASE,
@@ -226,8 +226,8 @@ def photo_template_complete(t: Optional[dict]) -> bool:
 def capture_stats() -> dict:
     """Live capture activity — proof the extension is on a logged-in FB tab and
     actively observing it. ``tab_active`` is True when a capture arrived recently
-    (default 90s window, FB_TAB_ACTIVE_WINDOW_S to tune)."""
-    window = float(os.getenv("FB_TAB_ACTIVE_WINDOW_S", "90"))
+    (default 90s window, FBEM_TAB_ACTIVE_WINDOW_S to tune)."""
+    window = float(os.getenv("FBEM_TAB_ACTIVE_WINDOW_S", "90"))
     seconds_since = (
         int(time.time() - _last_capture_at) if _last_capture_at is not None else None
     )

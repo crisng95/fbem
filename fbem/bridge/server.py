@@ -104,7 +104,7 @@ class SwitchProfileBody(BaseModel):
 
 # How long a tab stays "fresh" before it should be reloaded. The extension
 # auto-reloads within this window so a healthy tab never goes stale.
-_TAB_TTL_S = int(os.getenv("FB_TAB_TTL_S", "7200"))  # 2h
+_TAB_TTL_S = int(os.getenv("FBEM_TAB_TTL_S", "7200"))  # 2h
 
 
 def _ttl_block(last_active_at: Optional[float]) -> dict:
