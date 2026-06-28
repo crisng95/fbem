@@ -22,6 +22,8 @@ call `post_reel`, `post_photos`, `switch_profile`, `get_identity`, `health`, and
 
 ## Architecture
 
+![FBEM pipeline: AI Agent → MCP Server → Local Bridge → Chrome Extension → Facebook, with capture-once (manual post) → replay-many (automated)](docs/architecture.jpg)
+
 ```
   any MCP agent  (Claude Code / Desktop / Cursor / …)
        │  stdio  (MCP protocol)
