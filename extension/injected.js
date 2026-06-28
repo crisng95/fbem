@@ -571,6 +571,26 @@
     }
   }
 
+  // Scrub captured composer CONTEXT so a replay posts cleanly to the page feed as
+  // the LIVE identity — never inheriting the capture session's destinations. The
+  // captured request SHAPE is reused; only context/identity fields are normalized.
+  // Used by BOTH the reel and photo publish paths.
+  function scrubComposerContext(input, tokens) {
+    // Post AS the live (possibly switch_profile'd) identity, not the captured page.
+    if (tokens && tokens.__user) input.actor_id = String(tokens.__user);
+    // Never inherit the capture's group cross-posting targets — otherwise every
+    // reel/photo would auto-post into whatever groups the capture session selected.
+    delete input.groups_schedule_xposting;
+    // Drop stale analytics attribution (carries the capture's timestamp + page id).
+    delete input.navigation_data;
+    // Never inherit stale tags / co-author activities from the captured post.
+    if ('with_tags_ids' in input) input.with_tags_ids = [];
+    if ('inline_activities' in input) input.inline_activities = [];
+    // Deliberately KEPT: `audience` (feed visibility) and the request-SHAPE fields
+    // (composer_*/source/reels_remix/fb_shorts) — scrubbing them would change the
+    // visibility or trip a field_exception. Only destination/identity is normalized.
+  }
+
   // ── Step 5 — PUBLISH: replay the captured graphql mutation ─
   // The template body is a urlencoded form string. We parse the `variables`
   // JSON and mutate `input` structurally (video id, caption, session id, fresh
@@ -632,6 +652,9 @@
     // Strip captured trim artifacts so OUR video isn't trimmed to the old
     // session's timestamps. (start_time_s is intentionally left untouched.)
     deleteKeyDeep(input, 'trim_timestamps');
+
+    // Normalize captured composer context (identity, groups, analytics, tags).
+    scrubComposerContext(input, tokens);
 
     params.set('variables', JSON.stringify(v));
 
@@ -785,6 +808,9 @@
     } else {
       delete input.unpublished_content_data;
     }
+
+    // Normalize captured composer context (identity, groups, analytics, tags).
+    scrubComposerContext(input, tokens);
 
     params.set('variables', JSON.stringify(v));
 
