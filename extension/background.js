@@ -23,6 +23,7 @@ const CAPTURE_URL  = 'http://127.0.0.1:47102/api/ext/capture';
 let ws               = null;
 let callbackSecret   = null; // Auth secret received from agent on WS connect
 let manualDisconnect = false;
+let postInFlight     = 0;    // active post/switch count; pauses the periodic tab reload
 
 // ─── Facebook tab matchers ──────────────────────────────────
 
@@ -31,10 +32,14 @@ const FB_TAB_URLS = ['https://*.facebook.com/*', 'https://web.facebook.com/*'];
 // Find a logged-in facebook.com tab, retrying a few times. A tab that is
 // mid-navigation (e.g. right after a profile-switch reload) transiently fails the
 // url filter, returning empty — the retry rides that out instead of failing with
-// no_facebook_tab. Prefers the active tab, else any FB tab.
+// no_facebook_tab. Prefers the FOCUSED window's active FB tab (so a switch_profile
+// in one window isn't undone by posting via a different window's tab), then any
+// active FB tab, then any FB tab.
 async function findFbTab(attempts = 4, delayMs = 1500) {
   for (let i = 0; i < attempts; i++) {
     try {
+      const focused = await chrome.tabs.query({ url: FB_TAB_URLS, active: true, lastFocusedWindow: true });
+      if (focused.length) return focused[0];
       const active = await chrome.tabs.query({ url: FB_TAB_URLS, active: true });
       if (active.length) return active[0];
       const any = await chrome.tabs.query({ url: FB_TAB_URLS });
@@ -73,6 +78,7 @@ async function init() {
 
 // Reload the FB tab and tell the bridge we just refreshed (anchors the TTL).
 async function reloadFbTab() {
+  if (postInFlight > 0) return; // don't yank the tab out from under an active post/switch
   const tab = await findFbTab();
   if (!tab?.id) return;
   try {
@@ -127,15 +133,18 @@ function connectToAgent() {
       }
 
       if (msg.method === 'post_reel') {
-        await handlePostReel(msg);
+        postInFlight++;
+        try { await handlePostReel(msg); } finally { postInFlight--; }
         return;
       }
       if (msg.method === 'post_photos') {
-        await handlePostPhotos(msg);
+        postInFlight++;
+        try { await handlePostPhotos(msg); } finally { postInFlight--; }
         return;
       }
       if (msg.method === 'switch_profile') {
-        await handleSwitchProfile(msg);
+        postInFlight++;
+        try { await handleSwitchProfile(msg); } finally { postInFlight--; }
         return;
       }
       if (msg.method === 'get_identity') {
@@ -298,6 +307,51 @@ async function reloadTabAndWait(tabId, settleMs = 3000, navigateUrl = null) {
   });
   // Let content.js inject injected.js and FB page JS boot (tokens, composer cfg).
   await new Promise((r) => setTimeout(r, settleMs));
+  // The tab just (re)loaded — anchor the freshness TTL so /api/health doesn't drift
+  // 'stale' even when a steadily-posting bridge keeps the tab fresh via this path.
+  sendLastActive();
+}
+
+// ─── identity helpers (page_id auto-switch) ────────────────
+
+// Ask the page which identity (page/profile id) the tab currently posts AS.
+async function queryIdentity(tabId) {
+  try {
+    const r = await chrome.tabs.sendMessage(tabId, { type: 'get_identity', id: 'auto_' + Date.now() });
+    return r && r.ok ? String(r.identityId) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Honor a post's page_id: ensure the tab is acting AS that page, auto-switching if
+// needed. Returns {ok:true} once acting as pageId, else {ok:false,error} — so we
+// NEVER silently post to the wrong page. The switch needs a captured
+// CometProfileSwitchMutation (switchTemplate), forwarded by the bridge.
+async function ensureActingAs(tab, pageId, switchTemplate) {
+  const current = await queryIdentity(tab.id);
+  if (current && current === String(pageId)) return { ok: true };
+  if (!switchTemplate) {
+    return { ok: false, error: `page_switch_unavailable: tab acts as ${current || 'unknown'}, not ${pageId}; capture a CometProfileSwitchMutation or call switch_profile first` };
+  }
+  let sw;
+  try {
+    sw = await chrome.tabs.sendMessage(tab.id, {
+      type: 'switch_profile',
+      id: 'autosw_' + Date.now(),
+      params: { targetId: String(pageId), template: switchTemplate },
+    });
+  } catch (e) {
+    return { ok: false, error: `page_switch_failed: ${e?.message || e}` };
+  }
+  if (!sw || !sw.ok) return { ok: false, error: (sw && sw.error) || 'page_switch_failed' };
+  // The new identity's tokens load only after a reload (navigate home for clean ctx).
+  await reloadTabAndWait(tab.id, 3000, 'https://www.facebook.com/');
+  const after = await queryIdentity(tab.id);
+  if (!after || after !== String(pageId)) {
+    return { ok: false, error: `page_switch_unverified: tab acts as ${after || 'unknown'} after switching to ${pageId}` };
+  }
+  return { ok: true };
 }
 
 // ─── post_reel: forward to a facebook.com tab ───────────────
@@ -315,6 +369,13 @@ async function handlePostReel(msg) {
   if (!tab) {
     sendToAgent({ id, status: 503, error: 'no_facebook_tab' });
     return;
+  }
+
+  // Honor page_id: make the tab act AS the requested page before posting (else we
+  // would silently post as whatever identity the tab currently holds).
+  if (params.pageId) {
+    const acting = await ensureActingAs(tab, params.pageId, params.switchTemplate);
+    if (!acting.ok) { sendToAgent({ id, status: 502, error: acting.error }); return; }
   }
 
   // Reload the FB tab first (by request) so every upload starts from a fresh page.
@@ -392,6 +453,12 @@ async function handlePostPhotos(msg) {
   if (!tab) {
     sendToAgent({ id, status: 503, error: 'no_facebook_tab' });
     return;
+  }
+
+  // Honor page_id: make the tab act AS the requested page before posting.
+  if (params.pageId) {
+    const acting = await ensureActingAs(tab, params.pageId, params.switchTemplate);
+    if (!acting.ok) { sendToAgent({ id, status: 502, error: acting.error }); return; }
   }
 
   // Reload the FB tab first (by request) so every upload starts from a fresh page.
@@ -481,7 +548,14 @@ async function handleSwitchProfile(msg) {
       // After switch: navigate to facebook.com home so the URL reflects the new
       // identity and the page loads cleanly with the new identity's tokens.
       await reloadTabAndWait(tab.id, 3000, 'https://www.facebook.com/');
-      sendToAgent({ id, status: 200, data: { identityId: result.identityId, identityName: result.identityName } });
+      // Confirm the new identity actually took effect post-reload before reporting
+      // success — the mutation can succeed while the cookie flip races the reload.
+      const after = await queryIdentity(tab.id);
+      if (after && String(after) === String(params.targetId)) {
+        sendToAgent({ id, status: 200, data: { identityId: result.identityId, identityName: result.identityName } });
+      } else {
+        sendToAgent({ id, status: 502, error: `switch_unverified: tab acts as ${after || 'unknown'} after switching to ${params.targetId}` });
+      }
     } else {
       sendToAgent({ id, status: 500, error: (result && result.error) || 'switch_failed' });
     }

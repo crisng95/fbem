@@ -205,7 +205,12 @@ def save_capture(payload: dict) -> None:
         template[kind] = payload
         logger.info("folded kind=%s into template.json", kind)
 
-    _TEMPLATE_PATH.write_text(json.dumps(template, indent=2), encoding="utf-8")
+    # Atomic write (temp + os.replace) so a crash or interleaved write mid-flight
+    # can't leave a truncated template.json that load_template would silently treat
+    # as "no template captured".
+    tmp = _TEMPLATE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(template, indent=2), encoding="utf-8")
+    os.replace(tmp, _TEMPLATE_PATH)
 
 
 def template_complete(t: Optional[dict]) -> bool:

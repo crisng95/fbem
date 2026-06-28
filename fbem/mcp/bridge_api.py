@@ -6,6 +6,7 @@ Base URL: ``$FBEM_BRIDGE_URL`` (default ``http://127.0.0.1:47102``).
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 from pathlib import Path
@@ -98,7 +99,8 @@ async def post_reel(
     page_id: str | None = None,
     scheduled_publish_time: int | None = None,
 ) -> dict:
-    body: dict = {"videoUrl": _stage_media(video_path, kind="local-video"), "caption": caption}
+    staged = await asyncio.to_thread(_stage_media, video_path, kind="local-video")
+    body: dict = {"videoUrl": staged, "caption": caption}
     if page_id:
         body["pageId"] = page_id
     if scheduled_publish_time is not None:
@@ -112,7 +114,7 @@ async def post_photos(
     page_id: str | None = None,
     scheduled_publish_time: int | None = None,
 ) -> dict:
-    urls = [_stage_media(p, kind="local-image") for p in image_paths]
+    urls = [await asyncio.to_thread(_stage_media, p, kind="local-image") for p in image_paths]
     body: dict = {"imageUrls": urls, "caption": caption}
     if page_id:
         body["pageId"] = page_id

@@ -78,7 +78,12 @@ class BridgeClient:
         self._ws = ws
         self._last_active_at = time.time()  # fresh connect anchors the TTL
 
-    def clear_extension(self) -> None:
+    def clear_extension(self, ws: Any = None) -> None:
+        # Ignore a teardown from a STALE handler: if a newer connection already
+        # replaced self._ws, the old handler's `finally` must not clobber it nor
+        # reject the new session's in-flight futures.
+        if ws is not None and ws is not self._ws:
+            return
         self._ws = None
         # Drop the cached identity — next reconnect will replay.
         self._fb_user = None
@@ -152,17 +157,19 @@ class BridgeClient:
         extension isn't connected so callers can surface a meaningful
         diagnostic instead of silently losing the message.
         """
-        if not self.connected or self._ws is None:
+        ws = self._ws
+        if ws is None:
             return False
         try:
-            await self._ws.send(json.dumps(message))
+            await ws.send(json.dumps(message))
             return True
         except Exception as exc:  # noqa: BLE001
             logger.warning("notify failed: %s", exc)
             return False
 
     async def _send(self, method: str, params: dict, timeout: Optional[float] = None) -> dict:
-        if not self.connected:
+        ws = self._ws
+        if ws is None:
             return {"error": "extension_disconnected"}
 
         req_id = str(uuid.uuid4())
@@ -172,7 +179,7 @@ class BridgeClient:
 
         payload = {"id": req_id, "method": method, "params": params}
         try:
-            await self._ws.send(json.dumps(payload))
+            await ws.send(json.dumps(payload))
             return await asyncio.wait_for(fut, timeout=timeout or self.DEFAULT_TIMEOUT)
         except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
@@ -197,6 +204,7 @@ class BridgeClient:
         page_id: Optional[str],
         template: dict,
         scheduled_publish_time: Optional[int] = None,
+        switch_template: Optional[dict] = None,
         timeout: float = 300.0,
     ) -> dict:
         """Drive the extension to publish a native Facebook Reel.
@@ -212,6 +220,7 @@ class BridgeClient:
                 "videoUrl": video_url,
                 "caption": caption,
                 "pageId": page_id,
+                "switchTemplate": switch_template,
                 "template": template,
                 "scheduledPublishTime": scheduled_publish_time,
             },
@@ -225,6 +234,7 @@ class BridgeClient:
         page_id: Optional[str],
         template: dict,
         scheduled_publish_time: Optional[int] = None,
+        switch_template: Optional[dict] = None,
         timeout: float = 300.0,
     ) -> dict:
         """Drive the extension to publish a native Facebook photo / album post.
@@ -240,6 +250,7 @@ class BridgeClient:
                 "imageUrls": image_urls,
                 "caption": caption,
                 "pageId": page_id,
+                "switchTemplate": switch_template,
                 "template": template,
                 "scheduledPublishTime": scheduled_publish_time,
             },

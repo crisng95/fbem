@@ -38,7 +38,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi import Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from . import capture_store
 from .config import WS_HOST, media_dir
@@ -90,12 +90,35 @@ class PostReelBody(BaseModel):
     pageId: Optional[str] = None
     scheduledPublishTime: int | None = None
 
+    @field_validator("scheduledPublishTime")
+    @classmethod
+    def _check_schedule(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
+        # Must be epoch SECONDS. Reject millisecond epochs (~1e12) and nonsense.
+        if v < 1_000_000_000 or v > 10_000_000_000:
+            raise ValueError(
+                f"scheduledPublishTime must be epoch SECONDS (got {v}; looks like ms or out of range)"
+            )
+        return v
+
 
 class PostPhotosBody(BaseModel):
     imageUrls: list[str]
     caption: str
     pageId: Optional[str] = None
     scheduledPublishTime: int | None = None
+
+    @field_validator("scheduledPublishTime")
+    @classmethod
+    def _check_schedule(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
+        if v < 1_000_000_000 or v > 10_000_000_000:
+            raise ValueError(
+                f"scheduledPublishTime must be epoch SECONDS (got {v}; looks like ms or out of range)"
+            )
+        return v
 
 
 class SwitchProfileBody(BaseModel):
@@ -169,12 +192,14 @@ async def post_reel(body: PostReelBody) -> dict:
             "crawler (need BOTH the rupload video-upload and the publish mutation)",
         )
 
+    switch_tpl = (template.get("graphql_ops") or {}).get("CometProfileSwitchMutation") if body.pageId else None
     resp = await bridge_client.post_reel(
         video_url=body.videoUrl.strip(),
         caption=body.caption,
         page_id=body.pageId,
         template=template,
         scheduled_publish_time=body.scheduledPublishTime,
+        switch_template=switch_tpl,
     )
     if resp.get("error"):
         raise HTTPException(status_code=502, detail=str(resp["error"])[:300])
@@ -208,12 +233,14 @@ async def post_photos(body: PostPhotosBody) -> dict:
             "facebook.com to seed the crawler (need the ComposerStoryCreateMutation with photo attachments)",
         )
 
+    switch_tpl = (template.get("graphql_ops") or {}).get("CometProfileSwitchMutation") if body.pageId else None
     resp = await bridge_client.post_photos(
         image_urls=urls,
         caption=body.caption,
         page_id=body.pageId,
         template=template,
         scheduled_publish_time=body.scheduledPublishTime,
+        switch_template=switch_tpl,
     )
     if resp.get("error"):
         raise HTTPException(status_code=502, detail=str(resp["error"])[:300])
@@ -301,7 +328,7 @@ async def ext_capture(
         raise HTTPException(status_code=400, detail="invalid json body")
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="capture body must be an object")
-    capture_store.save_capture(payload)
+    await asyncio.to_thread(capture_store.save_capture, payload)
     return {"ok": True}
 
 
@@ -318,7 +345,7 @@ def local_video(name: str) -> FileResponse:
     page-context fetch avoids cross-origin CORS. Basename-only (no traversal);
     .mp4 only; restricted to the FBEM media dir."""
     p = _VIDEO_DIR / Path(name).name
-    if p.suffix != ".mp4" or not p.is_file():
+    if p.suffix.lower() != ".mp4" or not p.is_file():
         raise HTTPException(status_code=404, detail="not_found")
     return FileResponse(str(p), media_type="video/mp4")
 

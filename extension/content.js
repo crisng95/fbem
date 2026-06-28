@@ -79,28 +79,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       msg.type !== 'get_identity')
   )
     return;
-  const resultType = msg.type + '_result';
-
   // Stash the async reply callback; the page answers via <type>_result.
   pendingReel.set(msg.id, sendResponse);
 
-  // Safety timeout so the channel never hangs forever (uploads ~ minutes).
+  // Last-resort timeout so the message channel never hangs forever. Set ABOVE the
+  // bridge (~300s) and client (~320s) timeouts — which own the real deadline — so
+  // this never PRE-EMPTS a slow-but-successful upload with a false 'content_timeout'.
+  // Single resolution: ONLY sendResponse (which resolves background's await); the
+  // old extra fire-and-forget message double-reported the same id.
   setTimeout(() => {
     if (pendingReel.has(msg.id)) {
       pendingReel.delete(msg.id);
       // sendResponse may throw if the Chrome message port disconnected while
       // the upload was in flight — swallow any such error.
       try { sendResponse({ ok: false, error: 'content_timeout' }); } catch (_) { /* port gone */ }
-      // Also notify the background via a separate fire-and-forget message so
-      // the service can resolve its pending future even if the port is closed.
-      chrome.runtime.sendMessage({
-        type: resultType,
-        id: msg.id,
-        ok: false,
-        error: 'content_timeout',
-      });
     }
-  }, 290000); // ~290s, just under the service's ~300s timeout
+  }, 600000); // 10 min safety net only
 
   window.postMessage(
     { source: 'fbem-fb', type: msg.type, id: msg.id, params: msg.params },

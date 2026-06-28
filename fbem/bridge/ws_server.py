@@ -43,7 +43,7 @@ async def _handler(websocket) -> None:
     except websockets.ConnectionClosed:
         pass
     finally:
-        bridge_client.clear_extension()
+        bridge_client.clear_extension(websocket)
         logger.info("extension disconnected")
 
 

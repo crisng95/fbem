@@ -354,14 +354,17 @@
     return String(text || '').replace(/^for\s*\(;;\);/, '');
   }
 
-  // Walk the GraphQL response for any url/permalink-like field.
+  // Walk the GraphQL response for a post permalink. Matches FB's post/reel/share
+  // URL shapes by VALUE. (The old `/url/`-key branch was dead code — the value was
+  // always re-tested against this same regex anyway — so share-style permalinks
+  // like /share/r/<id>/ were missed even though the post succeeded.)
+  const PERMALINK_RE = /permalink|\/reel\/|\/videos\/|\/posts\/|\/share\//i;
   function findPermalink(obj, depth = 0) {
     if (!obj || depth > 8) return null;
     if (typeof obj === 'object') {
-      for (const [k, v] of Object.entries(obj)) {
-        if (typeof v === 'string' && /^https?:\/\//.test(v) &&
-            (/permalink|\/reel\/|\/videos\/|\/posts\//i.test(v) || /url/i.test(k))) {
-          if (/permalink|\/reel\/|\/videos\/|\/posts\//i.test(v)) return v;
+      for (const v of Object.values(obj)) {
+        if (typeof v === 'string' && /^https?:\/\//.test(v) && PERMALINK_RE.test(v)) {
+          return v;
         }
         if (typeof v === 'object') {
           const found = findPermalink(v, depth + 1);
@@ -586,9 +589,43 @@
     // Never inherit stale tags / co-author activities from the captured post.
     if ('with_tags_ids' in input) input.with_tags_ids = [];
     if ('inline_activities' in input) input.inline_activities = [];
+    // Never inherit the captured DESTINATION. `target_id` is the wall/group the
+    // ORIGINAL post went to; default it back to the acting identity's own feed so a
+    // template captured while posting into a Group/another wall doesn't redirect
+    // every replay there. The rest carry a captured group/place/recommendation.
+    if ('target_id' in input && tokens && tokens.__user) input.target_id = String(tokens.__user);
+    delete input.target_group_ids;
+    delete input.place;
+    delete input.location;
+    delete input.page_recommendation;
     // Deliberately KEPT: `audience` (feed visibility) and the request-SHAPE fields
     // (composer_*/source/reels_remix/fb_shorts) — scrubbing them would change the
     // visibility or trip a field_exception. Only destination/identity is normalized.
+  }
+
+  // Safely parse a captured publish mutation's `variables` → `input`. Throws a
+  // clear template_incomplete error (instead of a late TypeError on null) when the
+  // captured body is missing/rotated — call this BEFORE uploading any bytes so a
+  // bad template never orphans a completed upload.
+  function parsePublishVariables(cap, label) {
+    if (!cap || cap.body?.type !== 'string') {
+      throw new Error(`template_incomplete: ${label} body is not a captured string`);
+    }
+    const params = new URLSearchParams(cap.body.value || '');
+    const rawVars = params.get('variables');
+    if (rawVars == null) {
+      throw new Error(`template_incomplete: ${label} mutation has no \`variables\``);
+    }
+    let v;
+    try {
+      v = JSON.parse(rawVars);
+    } catch (_) {
+      throw new Error(`template_incomplete: ${label} \`variables\` is not valid JSON`);
+    }
+    if (!v || typeof v !== 'object' || !v.input || typeof v.input !== 'object') {
+      throw new Error(`template_incomplete: ${label} missing variables.input`);
+    }
+    return { params, v, input: v.input };
   }
 
   // ── Step 5 — PUBLISH: replay the captured graphql mutation ─
@@ -601,13 +638,7 @@
   // publish is SCHEDULED at that time; otherwise (default) publish IMMEDIATELY.
   async function graphqlPublish(template, videoId, caption, tokens, sessionId, scheduledPublishTime) {
     const cap = template.graphql;
-    if (!cap || cap.body?.type !== 'string') {
-      throw new Error('template_incomplete: graphql body is not a captured string');
-    }
-
-    const params = new URLSearchParams(cap.body.value || '');
-    const v = JSON.parse(params.get('variables'));
-    const input = v.input;
+    const { params, v, input } = parsePublishVariables(cap, 'reel');
 
     // Point the publish at OUR freshly-uploaded video (id + edit source), and
     // drop the captured video's content-specific metadata (length/audio of the
@@ -631,6 +662,9 @@
     // Caption.
     input.message = input.message || {};
     input.message.text = caption;
+    // Drop captured mention/hashtag entity ranges — their byte-offsets point into
+    // the OLD caption and are wrong/out-of-bounds for the new text (field_exception).
+    if (Array.isArray(input.message.ranges)) input.message.ranges = [];
 
     // Fresh composer session.
     if ('composer_session_id' in input) input.composer_session_id = sessionId;
@@ -774,12 +808,7 @@
   // ── Publish all photoIDs in one ComposerStoryCreateMutation ─
   async function publishPhotoStory(template, photoIds, caption, tokens, sessionId, scheduledPublishTime) {
     const cap = template.graphql_photo;
-    if (!cap || cap.body?.type !== 'string') {
-      throw new Error('template_incomplete: no photo publish mutation captured');
-    }
-    const params = new URLSearchParams(cap.body.value || '');
-    const v = JSON.parse(params.get('variables'));
-    const input = v.input;
+    const { params, v, input } = parsePublishVariables(cap, 'photo');
 
     // Point the post at OUR freshly-uploaded photos (preserve album order).
     input.attachments = photoIds.map((id) => ({ photo: { id: String(id) } }));
@@ -868,6 +897,10 @@
       return { ok: false, error: 'no_images' };
     }
     try {
+      // Validate the publish template up front so a rotated/missing mutation fails
+      // before we upload any image bytes.
+      parsePublishVariables(template.graphql_photo, 'photo');
+
       const tokens = readTokens();
       if (!tokens.fb_dtsg || !tokens.__user) return { ok: false, error: 'no_tokens' };
 
@@ -902,6 +935,10 @@
     }
 
     try {
+      // Validate the publish template UP FRONT so a rotated/missing mutation fails
+      // before we upload any bytes (a late throw would orphan a completed upload).
+      parsePublishVariables(template.graphql, 'reel');
+
       // Step 1 — rupload host (from config query / cached fallback).
       const ruploadHost = template.ruploadHost || 'https://rupload-sin2-1.up.facebook.com';
 
@@ -1054,7 +1091,8 @@
       // PAGE id (the actor), while `c_user` stays the personal account and
       // CurrentUserInitialData.ACCOUNT_ID also stays personal. So the real per-page
       // id is `i_user` when present; otherwise we're acting as the personal account.
-      // CurrentUserInitialData.NAME tracks the active identity's name either way.
+      // NAME is only reliable for the personal account — when acting as a Page the
+      // bootloader NAME stays personal, so we return name=null in that case.
       const id = data.id;
       const readCookie = (k) => {
         const m = new RegExp('(?:^|;\\s*)' + k + '=([^;]+)').exec(document.cookie || '');
@@ -1069,8 +1107,14 @@
         try {
           const cu = window.require?.('CurrentUserInitialData');
           if (cu) {
-            if (!identityId) identityId = cu.ACCOUNT_ID || cu.USER_ID || null;
-            identityName = cu.NAME || cu.SHORT_NAME || null;
+            const cuId = cu.ACCOUNT_ID || cu.USER_ID || null;
+            if (!identityId) identityId = cuId;
+            // Only trust the bootloader NAME when it belongs to the acting id. When
+            // acting as a Page (i_user set), CurrentUserInitialData stays the
+            // PERSONAL account, so its NAME would mislabel the page → leave it null.
+            if (identityId && cuId && String(identityId) === String(cuId)) {
+              identityName = cu.NAME || cu.SHORT_NAME || null;
+            }
           }
         } catch (_) {
           /* module not present on this surface — id-only is fine */
