@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "FBEM — Facebook Bridge",
+  "version": "0.0.1",
+  "description": "FBEM: crawls/snapshots and replays Facebook's native Reel/Photo composer web API for the local FBEM bridge + MCP.",
+  "permissions": ["storage", "alarms", "tabs", "scripting", "webRequest", "declarativeNetRequest"],
+  "host_permissions": [
+    "https://*.facebook.com/*",
+    "https://web.facebook.com/*",
+    "http://127.0.0.1:47102/*",
+    "http://localhost:47102/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.facebook.com/*", "https://web.facebook.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["https://*.facebook.com/*", "https://web.facebook.com/*"]
+    }
+  ]
+}

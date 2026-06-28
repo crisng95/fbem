@@ -1,0 +1,20 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Captured native FB requests — contain fb_dtsg / lsd / cookies / LIVE tokens. NEVER commit.
+captures/
+
+# Runtime
+logs/
+.env
+
+# OS
+.DS_Store
