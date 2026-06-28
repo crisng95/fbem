@@ -8,8 +8,7 @@ Don't change these unless you also rebuild the extension.
 The WS endpoint is unauthenticated by design (loopback-only); see the loopback
 enforcement in server.py.
 
-Env (FBEM_* preferred; legacy FB_BRIDGE_* / FB_STUDIO_* honored as fallbacks so
-an existing fb-studio install keeps working):
+Env (all optional; sensible loopback defaults):
   FBEM_HTTP_PORT      HTTP API port              (default 47102)
   FBEM_WS_HOST        WS bind host (loopback)     (default 127.0.0.1)
   FBEM_WS_PORT        extension WS port           (default 9224)
@@ -23,18 +22,15 @@ import os
 from pathlib import Path
 
 
-def _env(*names: str, default: str) -> str:
-    """First non-empty env var among `names`, else `default`."""
-    for n in names:
-        v = os.getenv(n)
-        if v:
-            return v
-    return default
+def _env(name: str, default: str) -> str:
+    """Value of env var `name` if set and non-empty, else `default`."""
+    v = os.getenv(name)
+    return v if v else default
 
 
-HTTP_PORT = int(_env("FBEM_HTTP_PORT", "FB_BRIDGE_HTTP_PORT", default="47102"))
-WS_HOST = _env("FBEM_WS_HOST", "FB_BRIDGE_WS_HOST", default="127.0.0.1")
-EXTENSION_WS_PORT = int(_env("FBEM_WS_PORT", "FB_BRIDGE_WS_PORT", default="9224"))
+HTTP_PORT = int(_env("FBEM_HTTP_PORT", default="47102"))
+WS_HOST = _env("FBEM_WS_HOST", default="127.0.0.1")
+EXTENSION_WS_PORT = int(_env("FBEM_WS_PORT", default="9224"))
 
 
 def home_dir() -> Path:
@@ -44,8 +40,8 @@ def home_dir() -> Path:
 
 def captures_dir() -> Path:
     """Where the bridge stores captured native templates. These contain live FB
-    tokens — keep private. Point FBEM_CAPTURES_DIR at an existing fb-studio
-    captures dir to reuse a template without re-snapshotting."""
+    tokens — keep private. Point FBEM_CAPTURES_DIR at an existing captures dir to
+    reuse a template without re-snapshotting."""
     d = _env("FBEM_CAPTURES_DIR", default="")
     return Path(d).expanduser().resolve() if d else (home_dir() / "captures")
 
@@ -53,5 +49,5 @@ def captures_dir() -> Path:
 def media_dir() -> Path:
     """Where the bridge serves media (mp4/jpg/png) to the extension over
     loopback. The MCP stages files here before posting."""
-    d = _env("FBEM_MEDIA_DIR", "FB_STUDIO_MEDIA", default="")
+    d = _env("FBEM_MEDIA_DIR", default="")
     return Path(d).expanduser().resolve() if d else (home_dir() / "media")
