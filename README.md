@@ -94,10 +94,10 @@ curl -s http://127.0.0.1:47102/api/health | python3 -m json.tool
 # look for: extension_connected: true, has_template: true, has_photo_template: true
 ```
 
-> **Reusing an existing fb-studio template?** Point the bridge at its captures and
-> skip re-snapshotting entirely:
+> **Already have captured templates elsewhere?** Point the bridge at that captures
+> directory and skip re-snapshotting entirely:
 > ```sh
-> FBEM_CAPTURES_DIR=/path/to/fb-studio/bridges/fb-bridge/captures fbem-bridge
+> FBEM_CAPTURES_DIR=/path/to/existing/captures fbem-bridge
 > ```
 
 ### 5. Plug the MCP into your agent
