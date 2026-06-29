@@ -271,6 +271,19 @@ function arrayBufferToBase64(buf) {
   return btoa(binary);
 }
 
+// When each tab was last hard-reloaded+settled BY US (reloadTabAndWait). A post
+// that immediately follows a switch_profile — which already reloaded the tab —
+// uses this to skip a second back-to-back reload: two reloads in a row churn the
+// page and can tear down the content script mid-upload (the "message channel
+// closed" failure). Keyed by tabId → epoch ms.
+const lastReloadAt = new Map();
+const RELOAD_FRESH_MS = 15000; // a reload within this window counts as still-fresh
+
+function tabIsFresh(tabId) {
+  const t = lastReloadAt.get(tabId);
+  return t != null && Date.now() - t < RELOAD_FRESH_MS;
+}
+
 // Reload a tab and wait until it finishes loading + its scripts re-initialise.
 // Done before every upload (by request) so each post starts from a guaranteed-
 // fresh page: avoids "Extension context invalidated" on an orphaned content
@@ -310,6 +323,8 @@ async function reloadTabAndWait(tabId, settleMs = 3000, navigateUrl = null) {
   // The tab just (re)loaded — anchor the freshness TTL so /api/health doesn't drift
   // 'stale' even when a steadily-posting bridge keeps the tab fresh via this path.
   sendLastActive();
+  // Record the reload so an immediately-following post can skip a redundant reload.
+  lastReloadAt.set(tabId, Date.now());
 }
 
 // ─── identity helpers (page_id auto-switch) ────────────────
@@ -378,8 +393,12 @@ async function handlePostReel(msg) {
     if (!acting.ok) { sendToAgent({ id, status: 502, error: acting.error }); return; }
   }
 
-  // Reload the FB tab first (by request) so every upload starts from a fresh page.
-  await reloadTabAndWait(tab.id);
+  // Reload the FB tab first (by request) so every upload starts from a fresh page —
+  // UNLESS it was just reloaded (e.g. by the preceding switch_profile / ensureActingAs).
+  // A second back-to-back reload churns the page and can destroy the content script
+  // mid-upload, which surfaces as "message channel closed". The recent reload already
+  // gave us fresh fb_dtsg/lsd tokens.
+  if (!tabIsFresh(tab.id)) await reloadTabAndWait(tab.id);
 
   // Fetch the video HERE in the service worker, not in the page. The page is
   // https://facebook.com; fetching the http://127.0.0.1 loopback URL from page
@@ -461,8 +480,12 @@ async function handlePostPhotos(msg) {
     if (!acting.ok) { sendToAgent({ id, status: 502, error: acting.error }); return; }
   }
 
-  // Reload the FB tab first (by request) so every upload starts from a fresh page.
-  await reloadTabAndWait(tab.id);
+  // Reload the FB tab first (by request) so every upload starts from a fresh page —
+  // UNLESS it was just reloaded (e.g. by the preceding switch_profile / ensureActingAs).
+  // A second back-to-back reload churns the page and can destroy the content script
+  // mid-upload, which surfaces as "message channel closed". The recent reload already
+  // gave us fresh fb_dtsg/lsd tokens.
+  if (!tabIsFresh(tab.id)) await reloadTabAndWait(tab.id);
 
   const urls = Array.isArray(params.imageUrls) ? params.imageUrls : [];
   if (!urls.length) {
