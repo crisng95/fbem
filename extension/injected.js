@@ -696,6 +696,13 @@
     if (tokens.fb_dtsg) params.set('fb_dtsg', tokens.fb_dtsg);
     if (tokens.lsd) params.set('lsd', tokens.lsd);
     if (tokens.__user) params.set('__user', tokens.__user);
+    // Refresh the acting-viewer (`av`) too — NOT just `__user`. The captured template
+    // carries the `av` of whatever identity was active when it was recorded. When we
+    // replay AS a different page (switch_profile flipped __user + actor_id to the
+    // target page) a stale `av` points at the OLD page, so FB rejects the publish with
+    // 1373034 "Insufficient Permission for the specified Page". Pin av = __user (the
+    // page we're posting as), mirroring switch_profile. Success iff av == __user.
+    if (tokens.__user) params.set('av', tokens.__user);
     const jazoest = tokens.jazoest || jazoestFor(tokens.fb_dtsg);
     if (jazoest) params.set('jazoest', jazoest);
 
@@ -847,6 +854,13 @@
     if (tokens.fb_dtsg) params.set('fb_dtsg', tokens.fb_dtsg);
     if (tokens.lsd) params.set('lsd', tokens.lsd);
     if (tokens.__user) params.set('__user', tokens.__user);
+    // Refresh the acting-viewer (`av`) too — NOT just `__user`. The captured template
+    // carries the `av` of whatever identity was active when it was recorded. When we
+    // replay AS a different page (switch_profile flipped __user + actor_id to the
+    // target page) a stale `av` points at the OLD page, so FB rejects the publish with
+    // 1373034 "Insufficient Permission for the specified Page". Pin av = __user (the
+    // page we're posting as), mirroring switch_profile. Success iff av == __user.
+    if (tokens.__user) params.set('av', tokens.__user);
     const jazoest = tokens.jazoest || jazoestFor(tokens.fb_dtsg);
     if (jazoest) params.set('jazoest', jazoest);
 
